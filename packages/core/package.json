@@ -1,0 +1,35 @@
+{
+  "name": "@maho/core",
+  "version": "0.0.1",
+  "description": "Maho Cordis 构建侧服务体系：配置解析、插件加载、MFContext。",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --emitDeclarationOnly --outDir dist || echo skip"
+  },
+  "keywords": ["maho", "microfrontend", "cordis", "core"],
+  "license": "MIT",
+  "dependencies": {
+    "@maho/boot": "workspace:*",
+    "cordis": "^4.0.0-rc.6",
+    "js-yaml": "^4.1.0",
+    "jiti": "^2.4.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9"
+  }
+}
