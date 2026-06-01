@@ -1,0 +1,41 @@
+{
+  "name": "@maho/boot-vue",
+  "version": "0.0.1",
+  "description": "Maho Vue 适配实现：createMahoApp、BootAdapter for vue + vue-router + pinia。",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "typecheck": "vue-tsc --noEmit",
+    "build": "vue-tsc --emitDeclarationOnly --outDir dist || echo skip"
+  },
+  "dependencies": {
+    "@maho/boot": "workspace:*"
+  },
+  "peerDependencies": {
+    "vue": "^3.4.0",
+    "vue-router": "^4.3.0",
+    "pinia": "^2.1.0"
+  },
+  "devDependencies": {
+    "vue": "^3.4.0",
+    "vue-router": "^4.3.0",
+    "pinia": "^2.1.0",
+    "vue-tsc": "^2.0.0",
+    "typescript": "^5.4.0"
+  },
+  "keywords": ["maho", "microfrontend", "vue", "boot-vue"],
+  "license": "MIT"
+}

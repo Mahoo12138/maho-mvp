@@ -1,0 +1,26 @@
+{
+  "name": "@maho/boot",
+  "version": "0.0.1",
+  "description": "Maho 框架无关运行时核心：BootAdapter 协议、启动流水线、联邦加载、路由合并、布局解析。",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --emitDeclarationOnly --outDir dist || echo skip"
+  },
+  "keywords": ["maho", "microfrontend", "module-federation", "boot"],
+  "license": "MIT"
+}
