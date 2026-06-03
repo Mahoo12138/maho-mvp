@@ -1,3 +1,4 @@
+import { shareScope as mahoShareScope } from 'virtual:maho-config'
 import type { FederationConfig } from '../interfaces/MahoOptions'
 import type {
   FederationManifest,
@@ -39,63 +40,37 @@ export async function loadFederation(
 async function resolveManifest(
   config: FederationConfig,
 ): Promise<ManifestRemoteEntry[]> {
-  const fromStatic: ManifestRemoteEntry[] = (config.remotes ?? []).map(
-    (url) => ({ name: inferNameFromUrl(url), entry: url }),
-  )
-
-  if (!config.manifestUrl) return fromStatic
-
-  let manifest: FederationManifest | null = null
-  try {
-    const res = await fetch(config.manifestUrl)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    manifest = (await res.json()) as FederationManifest
-  } catch (err) {
-    console.warn(
-      `[Maho] Failed to fetch manifest ${config.manifestUrl}, falling back to static remotes:`,
-      err,
-    )
-    return fromStatic
+  const byName = new Map<string, ManifestRemoteEntry>()
+  for (const entry of (config.remotes ?? [])) {
+    byName.set(entry.name, entry)
   }
 
-  const byName = new Map<string, ManifestRemoteEntry>()
-  for (const entry of fromStatic) byName.set(entry.name, entry)
-  for (const entry of manifest.remotes ?? []) byName.set(entry.name, entry)
+  if (config.manifestUrl) {
+    try {
+      const res = await fetch(config.manifestUrl)
+      if (res.ok) {
+        const manifest = (await res.json()) as FederationManifest
+        for (const entry of manifest.remotes ?? []) {
+          byName.set(entry.name, entry)
+        }
+      } else {
+        console.warn(
+          `[Maho] Manifest fetch returned HTTP ${res.status} for ${config.manifestUrl}`,
+        )
+      }
+    } catch (err) {
+      console.warn(
+        `[Maho] Failed to fetch manifest ${config.manifestUrl}, falling back to static remotes:`,
+        err,
+      )
+    }
+  }
+
   return [...byName.values()]
 }
 
 /**
- * 从 URL 推断模块名：取倒数第二段（典型 .../module-order/remoteEntry.js → module-order）。
- * 推断失败则用 entry.js 前缀，再失败则用整个 URL 哈希作为兜底 key。
- */
-function inferNameFromUrl(url: string): string {
-  try {
-    const u = new URL(url)
-    const parts = u.pathname.split('/').filter(Boolean)
-    if (parts.length >= 2) {
-      const candidate = parts[parts.length - 2]
-      if (candidate) return candidate
-    }
-    const file = parts[parts.length - 1] ?? ''
-    if (file && file !== 'remoteEntry.js') {
-      return file.replace(/\.[mc]?js$/, '')
-    }
-  } catch {
-    /* fall through */
-  }
-  return `remote_${hashString(url)}`
-}
-
-function hashString(s: string): string {
-  let h = 0
-  for (let i = 0; i < s.length; i++) {
-    h = (h * 31 + s.charCodeAt(i)) | 0
-  }
-  return Math.abs(h).toString(36)
-}
-
-/**
- * 加载单个 remoteEntry.js：脚本注入 → 等待 container 暴露 → init shareScope → 返回 RemoteModule。
+ * 加载单个 remoteEntry：动态 import() → 获取 { get, init } 导出 → init shareScope → 返回 RemoteModule。
  * 带 3 次重试（500/1000/1500ms 间隔）。
  */
 async function loadRemoteEntry(
@@ -116,25 +91,23 @@ async function loadRemoteEntry(
 async function loadRemoteEntryOnce(
   entry: ManifestRemoteEntry,
 ): Promise<RemoteModule> {
-  if (typeof window === 'undefined') {
-    throw new Error('[Maho] loadRemoteEntry requires a browser environment')
-  }
+  // originjs 的 remoteEntry.js 是 ES module，exports { get, init }，
+  // 不注册 window 上的 container。直接用 import() 获取。
+  // 动态 URL（http://...）不会被 Vite 解析，直接走浏览器原生 import()
+  const container: FederationContainer = await import(entry.entry)
 
-  await injectScript(entry.entry, entry.integrity)
-
-  const container = (window as any)[entry.name] as FederationContainer | undefined
-  if (!container || typeof container.get !== 'function') {
+  if (typeof container.get !== 'function') {
     throw new Error(
-      `[Maho] Remote container "${entry.name}" not found on window after loading ${entry.entry}`,
+      `[Maho] Remote "${entry.name}" entry did not export "get" — ` +
+        `expected an @originjs/vite-plugin-federation remote entry`,
     )
   }
 
-  const shareScope = (window as any).__federation_shared__ ?? {}
   if (typeof container.init === 'function') {
     try {
-      await container.init(shareScope)
+      container.init(mahoShareScope)
     } catch {
-      /* 多次 init 在某些实现里会抛错，忽略即可 */
+      /* 重复 init 可能抛错，忽略 */
     }
   }
 
@@ -155,58 +128,8 @@ async function loadRemoteEntryOnce(
 }
 
 interface FederationContainer {
-  init?(shareScope: unknown): unknown
+  init?(shareScope: unknown): void
   get(exposePath: string): Promise<() => unknown> | (() => unknown)
-}
-
-function injectScript(src: string, integrity?: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (typeof document === 'undefined') {
-      reject(new Error('[Maho] document is not available'))
-      return
-    }
-    const existing = document.querySelector<HTMLScriptElement>(
-      `script[data-maho-remote="${cssEscape(src)}"]`,
-    )
-    if (existing) {
-      if (existing.dataset.mahoLoaded === 'true') {
-        resolve()
-        return
-      }
-      existing.addEventListener('load', () => resolve(), { once: true })
-      existing.addEventListener(
-        'error',
-        () => reject(new Error(`[Maho] Script load error: ${src}`)),
-        { once: true },
-      )
-      return
-    }
-
-    const script = document.createElement('script')
-    script.src = src
-    script.type = 'text/javascript'
-    script.async = true
-    script.dataset.mahoRemote = src
-    if (integrity) script.integrity = integrity
-    script.addEventListener(
-      'load',
-      () => {
-        script.dataset.mahoLoaded = 'true'
-        resolve()
-      },
-      { once: true },
-    )
-    script.addEventListener(
-      'error',
-      () => reject(new Error(`[Maho] Script load error: ${src}`)),
-      { once: true },
-    )
-    document.head.appendChild(script)
-  })
-}
-
-function cssEscape(s: string): string {
-  return s.replace(/["\\]/g, '\\$&')
 }
 
 function sleep(ms: number): Promise<void> {

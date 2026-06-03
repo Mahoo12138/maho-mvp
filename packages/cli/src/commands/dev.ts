@@ -91,9 +91,6 @@ export async function devCommand(opts: DevOptions = {}): Promise<void> {
     }
     catch (err) {
       logger.error(`Failed to start "${t.name}": ${(err as Error).message}`)
-      if (process.env.MAHO_DEBUG) {
-        console.error(err)
-      }
       await shutdownAll(running)
       process.exit(1)
     }

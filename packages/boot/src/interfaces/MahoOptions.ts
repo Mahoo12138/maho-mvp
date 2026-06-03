@@ -3,7 +3,7 @@ import type { RouteInterceptor } from './RouteInterceptor'
 
 export interface FederationConfig {
   /** remoteEntry.js 完整 URL 列表 */
-  remotes: string[]
+  remotes: Array<{ name: string; entry: string }>
   /** 动态 manifest URL；若提供，将与静态 remotes 合并（动态优先） */
   manifestUrl?: string | null
 }

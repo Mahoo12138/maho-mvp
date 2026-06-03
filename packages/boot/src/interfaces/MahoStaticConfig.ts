@@ -8,7 +8,7 @@ export interface MahoStaticConfig {
   role: 'host' | 'remote'
   mode: string
   federation: {
-    remotes: string[]
+    remotes: Array<{ name: string; entry: string }>
     manifestUrl: string | null
   }
   /**

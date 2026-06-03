@@ -130,15 +130,16 @@ export async function startRemotePreviewServer(
     root: target.cwd,
     configFile: false,
     plugins,
+    // 设置 base 为 remote 自身的完整 URL，使 Vite 生成的 chunk
+    // 引用（如 /assets/Home-xxx.js）被解析到 remote 的端口上，
+    // 而非 host 页面所在的 origin。详见 S4-O15。
+    base: `http://127.0.0.1:${target.port}/`,
     mode: 'development',
     logLevel: 'warn',
     build: {
       minify: false,
       sourcemap: true,
       target: 'esnext',
-      // assetsDir 默认 'assets' —— originjs 的 emitFile 会把
-      // remoteEntry 写入 `${assetsDir}/${filename}`，所以 dev URL
-      // 必须带上 /assets/ 前缀（见 dev.ts 中 devRemotes 拼接）。
     },
   })
 
