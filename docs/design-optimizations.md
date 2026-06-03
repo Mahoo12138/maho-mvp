@@ -694,13 +694,25 @@ boot: "@maho/boot-vue"     # 换成 @maho/boot-react 即切换框架
 
 ---
 
-### S4-O15：dev URL 跟随 originjs 默认 `assetsDir`
+### S4-O15：跨域 chunk 解析 —— `base` 设为 remote 的完整 dev URL
 
-**问题**：CLI 注入到 host `MAHO_DEV_REMOTES` 的 URL 原本是 `http://host:port/remoteEntry.js`。但 originjs 的 `emitFile` 使用 `builderInfo.assetsDir + '/' + filename`，默认 assetsDir 为 `assets`，所以实际产物在 `dist/assets/remoteEntry.js`，host 拉根路径会 404。
+**问题**：host 通过 `import('http://127.0.0.1:5174/assets/remoteEntry.js')` 跨域加载 remote 入口，但 expose chunk 内部 Vite 生成的 chunk 引用默认使用 `base: '/'` —— 即绝对路径 `/assets/Home-xxx.js`。浏览器在跨域模块内解析绝对路径时以 **document 所在 origin**（host 的 5173）为基准，导致 JS/CSS 被发往错误的端口。
 
-**采用方案**（`packages/cli/src/commands/dev.ts`）：将 dev URL 拼为 `http://127.0.0.1:port/assets/remoteEntry.js`。
+尝试过的方案及其问题：
+1. `base: './'`（相对路径）：使 expose chunk 的引用全部变为 `./Home-xxx.js`（正确解析到 remote），但同时会改变 originjs 在 `remoteEntry.js` 中生成的 import 路径 —— 从 `./__federation_expose_xxx.js` 变成 `./assets/__federation_expose_xxx.js`，导致双写 `assets/assets/`。
+2. `build.assetsDir = ''`：把所有 chunk 堆到 dist 根目录 —— 污染输出结构。
 
-**为何不改 `build.assetsDir = ''`**：会让所有 chunk 都堆到 dist 根目录，把 federation 输出与一般 asset 混在一起；保留 originjs 默认目录结构，URL 上对齐才是最小代价。
+**采用方案**（`packages/cli/src/core/vite-runner.ts` `startRemotePreviewServer`）：将 `base` 设为 remote 的完整 dev URL（`http://127.0.0.1:<port>/`）。效果：
+- `remoteEntry.js` 中 originjs 生成的 `import('./__federation_expose_xxx.js')` **不受 `base` 影响**（originjs 使用 Rollup `emitFile` fileName 的文本拼接，不走 Vite 的 base 前缀）
+- expose chunk 中的 `__vite__mapDeps` 路径通过 `assetsURL(dep)` = `'http://127.0.0.1:5174/' + dep` 拼接出完整 URL，绝对路径直接指向 remote
+- expose chunk 内的 `import('./Home-xxx.js')` 是相对路径，浏览器解析到 remote origin
+
+CLI 在构造 `ViteTarget` 时已知端口号（`port-manager` 分配），可在 `viteBuild` 调用点直接拼 base。对用户完全透明 —— `maho dev` 一条命令即可。
+
+**影响**：
+- ✅ 所有跨域 chunk 解析自动正确，无需用户理解 Vite `base` / Rollup emitFile / originjs path 拼接的内部机制
+- ✅ dev 模式下 base 动态跟随端口分配（端口可能因为占用而偏移）
+- ⚠️ 生产构建（`maho build`）的 `base` 应来自 config YAML 的 `federation.base` 字段 —— 留到 V2 落地
 
 ---
 
@@ -731,7 +743,23 @@ boot: "@maho/boot-vue"     # 换成 @maho/boot-react 即切换框架
 
 ---
 
-## 待跟踪事项（V2）
+### S4-O18：shareScope 版本键解析 —— 从 `'undefined'` 改为实际安装版本
+
+**问题**：host 通过 `virtual:maho-config` 的 `shareScope` 向 remote 的 `init()` 传递共享依赖的 getter，但版本键（version key）初版固定为字符串 `'undefined'`。remote 的 module federation runtime 在 `getSharedFromRuntime` 中通过 `satisfy(versionKey, requiredVersion)` 匹配 —— `satisfy('undefined', '^3.4.0')` 在 semver 下必然为 false，导致 host shareScope 被跳过，remote 退回到自己的本地 singleton 副本（分离的 vue-router / pinia 实例）。
+
+**采用方案**（`packages/vite-plugin/src/plugins/virtual-config.ts` `buildShareScopeSource`）：
+
+1. 优先使用 `shared` 配置中显式声明的 `version`（来自用户 / boot adapter）
+2. 其次 `requiredVersion`
+3. 兜底从 `node_modules/<pkg>/package.json` 读取实际安装版本（`resolvePackageVersion`）
+
+`virtual:maho-config` 新增命名导出 `shareScope`，由 `@maho/boot` 的 `federation.ts` 在 `loadRemoteEntryOnce` 中导入并传给 `container.init()`，替代原来空的 `globalThis.__federation_shared__`。
+
+**影响**：
+- ✅ 版本键（如 `'3.5.35'`）可被 semver 正确验证，满足 remote 的 `requiredVersion`（`^3.4.0`）
+- ✅ vue / vue-router / pinia 在 host 与 remote 之间共用同一实例，singleton 机制生效
+- ✅ 对未安装的包返回 `'0.0.0'` 作为 fallback，不做 crash
+- ⚠️ `import('vue')` 依赖 Vite transform 管线将其重写为预打包 dep URL；仅在 Vite dev/prod 上下文中有效
 
 - **Federation 运行时变量名稳定化**：当前 boot 用 `window.__federation_shared__` 兜底，依赖 `@originjs/vite-plugin-federation` 的内部命名。需要在 V2 跟进底层实现变更，或封装一层适配。
 - **类型注册表增量更新**：Step 3 接入 core 后实现 lockfile mtime 比对，避免冷启动全量扫描。

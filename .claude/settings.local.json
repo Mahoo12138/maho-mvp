@@ -5,7 +5,10 @@
       "PowerShell(Stop-Process *)",
       "PowerShell(Out-File *)",
       "PowerShell(Get-Process *)",
-      "PowerShell(Get-Content *)"
+      "PowerShell(Get-Content *)",
+      "PowerShell(pnpm *)",
+      "WebFetch(domain:127.0.0.1)",
+      "PowerShell(netstat *)"
     ]
   },
   "enableAllProjectMcpServers": true,
