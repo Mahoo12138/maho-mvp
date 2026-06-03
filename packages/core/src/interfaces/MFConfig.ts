@@ -11,6 +11,16 @@ export interface MFConfig {
   /** 当前包名。remote 必填；host 可省略（取 package.json name） */
   name?: string
 
+  /**
+   * Boot 包名。声明该字段后，core 在 createMahoContext 中会动态加载
+   * `${boot}/build`，并把返回的 BootBuildAdapter 注册到 ctx.boot。
+   *
+   * ```yaml
+   * boot: "@maho/boot-vue"
+   * ```
+   */
+  boot?: string
+
   /** 联邦配置（host 专用） */
   federation?: {
     remotes?: string[]

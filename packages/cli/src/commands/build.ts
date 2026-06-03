@@ -1,7 +1,6 @@
-import { execa } from 'execa'
 import { resolveWorkspaceContext } from '../core/workspace'
-import { resolveBin } from '../core/bin-resolver'
 import { buildBuildPlan } from '../core/topology'
+import { runBuild, type ViteTarget } from '../core/vite-runner'
 import { logger } from '../utils/logger'
 
 export interface BuildOptions {
@@ -33,7 +32,9 @@ export async function buildCommand(opts: BuildOptions = {}): Promise<void> {
   if (plan.remotes.length) {
     logger.step(`Building ${plan.remotes.length} remote(s) in parallel...`)
     const settled = await Promise.allSettled(
-      plan.remotes.map((a) => runViteBuild(a.dir, mode)),
+      plan.remotes.map((a) =>
+        runBuild({ name: a.name, role: 'remote', cwd: a.dir }, mode),
+      ),
     )
     settled.forEach((r, i) => {
       const name = plan.remotes[i].name
@@ -50,13 +51,19 @@ export async function buildCommand(opts: BuildOptions = {}): Promise<void> {
   // Stage 2: host 串行（host 失败整体退出 1）
   if (plan.host) {
     logger.step('Building host...')
+    const hostName = ctx.hostConfig.name ?? 'host'
+    const hostTarget: ViteTarget = {
+      name: hostName,
+      role: 'host',
+      cwd: ctx.root,
+    }
     try {
-      await runViteBuild(ctx.root, mode)
-      results.push({ name: 'host', ok: true })
+      await runBuild(hostTarget, mode)
+      results.push({ name: hostName, ok: true })
     }
     catch (err) {
-      results.push({ name: 'host', ok: false, err })
-      logger.error(`Build failed: host: ${formatError(err)}`)
+      results.push({ name: hostName, ok: false, err })
+      logger.error(`Build failed: ${hostName}: ${formatError(err)}`)
       printSummary(results)
       process.exit(1)
     }
@@ -64,19 +71,6 @@ export async function buildCommand(opts: BuildOptions = {}): Promise<void> {
 
   printSummary(results)
   if (results.some((r) => !r.ok)) process.exit(1)
-}
-
-async function runViteBuild(cwd: string, mode: string): Promise<void> {
-  const viteBin = resolveBin(cwd, 'vite')
-  await execa(viteBin, ['build', '--mode', mode], {
-    cwd,
-    stdio: 'inherit',
-    env: {
-      ...process.env,
-      FORCE_COLOR: '1',
-      NODE_ENV: mode === 'prod' ? 'production' : mode,
-    },
-  })
 }
 
 function printSummary(results: BuildResult[]): void {

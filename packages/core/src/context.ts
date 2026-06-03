@@ -1,6 +1,7 @@
 import { Context } from 'cordis'
 import type { ConfigService } from './services/config'
 import type { ModeService } from './services/mode'
+import type { BootService } from './services/boot'
 import type { ResolvedMFConfig } from './interfaces/MFConfig'
 
 /**
@@ -14,6 +15,7 @@ declare module 'cordis' {
   interface Context {
     config: ConfigService
     mode: ModeService
+    boot: BootService
   }
 
   interface Events {

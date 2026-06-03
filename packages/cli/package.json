@@ -23,10 +23,12 @@
   "keywords": ["maho", "microfrontend", "cli"],
   "license": "MIT",
   "dependencies": {
+    "@maho/boot": "workspace:*",
     "@maho/core": "workspace:*",
+    "@maho/vite-plugin": "workspace:*",
     "cac": "^6.7.14",
-    "execa": "^9.5.1",
     "jiti": "^2.4.0",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "vite": "^5.0.0"
   }
 }

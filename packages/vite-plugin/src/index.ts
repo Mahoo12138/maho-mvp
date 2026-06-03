@@ -51,7 +51,7 @@ export async function maho(options: MahoPluginOptions): Promise<Plugin[]> {
 
   const plugins: Plugin[] = [
     mahoVirtualConfigPlugin(resolved),
-    await mahoFederationPlugin(resolved),
+    ...(await mahoFederationPlugin(resolved)),
     mahoCSSModulesPlugin(resolved),
     mahoTypeRegistryPlugin(resolved),
   ]

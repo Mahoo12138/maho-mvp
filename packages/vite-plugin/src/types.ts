@@ -1,4 +1,4 @@
-import type { MahoRoute } from '@maho/boot'
+import type { MahoRoute } from '@maho/boot/types'
 
 export interface SharedDep {
   singleton?: boolean

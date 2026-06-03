@@ -24,6 +24,12 @@ export { load } from './helpers/load'
 // ── 类型导出 ─────────────────────────────────────────
 export type { BootAdapter } from './interfaces/BootAdapter'
 export type {
+  BootBuildAdapter,
+  BootSharedDep,
+  BootSharedDepsMap,
+  VitePluginLike,
+} from './interfaces/BootBuildAdapter'
+export type {
   MahoRoute,
   MahoRouteMeta,
   ModuleRoute,

@@ -21,9 +21,9 @@ export function resolveExposes(
     const relSrc = exposePath.replace(/^\.\//, 'src/')
     const resolved = resolveSourceFile(options.projectRoot, relSrc)
     if (resolved) {
-      result[exposePath] = './' + path
-        .relative(options.projectRoot, resolved)
-        .replace(/\\/g, '/')
+      // 用绝对路径而非项目内相对路径 —— 当 vite 由 CLI 在其他 cwd 下程序化
+      // 调起（vite-runner），rollup 用 process.cwd() 解析相对路径会找错。
+      result[exposePath] = resolved.replace(/\\/g, '/')
     } else {
       console.warn(
         `[Maho] Expose "${exposePath}" declared but no source file found under "${relSrc}.*"`,
@@ -37,9 +37,7 @@ export function resolveExposes(
     const relSrc = `src/${conventional.replace('./', '')}`
     const resolved = resolveSourceFile(options.projectRoot, relSrc)
     if (resolved) {
-      result[conventional] = './' + path
-        .relative(options.projectRoot, resolved)
-        .replace(/\\/g, '/')
+      result[conventional] = resolved.replace(/\\/g, '/')
     }
   }
 

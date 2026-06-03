@@ -1,6 +1,7 @@
 import { MFContext } from './context'
 import { ModeService } from './services/mode'
 import { ConfigService } from './services/config'
+import { BootService } from './services/boot'
 import { loadPlugin } from './utils/plugin-loader'
 
 export interface CreateMahoContextOptions {
@@ -25,17 +26,23 @@ export async function createMahoContext(
   const mode = opts.mode ?? 'dev'
 
   const ctx = new MFContext()
-  ctx.plugin(ModeService, mode)
-  ctx.plugin(ConfigService, { projectRoot })
+  await ctx.plugin(ModeService, mode)
+  await ctx.plugin(ConfigService, { projectRoot })
 
   await ctx.config.load(mode)
+
+  const bootPkg = ctx.config.resolved.boot
+  if (bootPkg) {
+    await ctx.plugin(BootService, { projectRoot, bootPkg })
+    await ctx.boot.load()
+  }
 
   for (const decl of ctx.config.resolved.plugins ?? []) {
     const plugin = await loadPlugin(decl, projectRoot)
     const apply = plugin.apply ?? plugin.default
     if (typeof apply === 'function') {
       // 用户插件签名由插件作者决定，core 这里只把声明的 `with` 透传给 apply。
-      ;(ctx.plugin as (p: unknown, c?: unknown) => unknown)(apply, decl.with)
+      await (ctx.plugin as (p: unknown, c?: unknown) => unknown)(apply, decl.with)
     }
   }
 

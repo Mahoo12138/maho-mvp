@@ -1,5 +1,5 @@
 import type { Plugin } from 'vite'
-import type { MahoStaticConfig } from '@maho/boot'
+import type { MahoStaticConfig } from '@maho/boot/types'
 import type { ResolvedMahoPluginOptions } from '../types'
 
 const VIRTUAL_ID = 'virtual:maho-config'

@@ -38,6 +38,13 @@ export function validateConfig(
     })
   }
 
+  if (config.boot !== undefined && typeof config.boot !== 'string') {
+    errors.push({
+      path: 'boot',
+      message: `boot must be a package specifier string, got ${JSON.stringify(config.boot)}`,
+    })
+  }
+
   if (config.role === 'host' && config.federation?.remotes) {
     config.federation.remotes.forEach((url, i) => {
       if (!isValidUrl(url)) {

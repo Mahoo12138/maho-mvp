@@ -1,43 +1,45 @@
-import { execa } from 'execa'
-import { resolveWorkspaceContext } from '../core/workspace'
+import pc from 'picocolors'
+import { resolveWorkspaceContext, type AppInfo } from '../core/workspace'
 import { allocatePort } from '../core/port-manager'
-import { buildDevManifestEnv } from '../core/dev-manifest'
 import {
-  ProcessManager,
-  assignColors,
-  type DevTarget,
-} from '../core/process-manager'
-import { resolveDevApps } from '../core/topology'
-import { logger } from '../utils/logger'
+  startHostDevServer,
+  startRemotePreviewServer,
+  type ViteTarget,
+} from '../core/vite-runner'
+import {
+  pickPrefixColor,
+  colorize,
+  logger,
+  type PrefixColor,
+} from '../utils/logger'
 
 export interface DevOptions {
   filter?: string
   hostOnly?: boolean
 }
 
+interface RunningTarget extends ViteTarget {
+  color: PrefixColor
+  url: string
+  close: () => Promise<void>
+}
+
 export async function devCommand(opts: DevOptions = {}): Promise<void> {
   const ctx = await resolveWorkspaceContext()
 
-  // 在 remote 子包目录中执行 → 重新以 root 为 cwd 执行
-  // `maho dev --filter <self>`。spawn 子进程而非内部转发，
-  // 避免重复 ConfigService 初始化产生的状态污染。
-  if (ctx.role === 'remote' && ctx.currentAppName && ctx.cwd !== ctx.root) {
-    logger.info(
-      `Detected remote "${ctx.currentAppName}", delegating to workspace root...`,
-    )
-    const args = ['dev', '--filter', ctx.currentAppName]
-    await execa(process.execPath, [process.argv[1], ...args], {
-      cwd: ctx.root,
-      stdio: 'inherit',
-      reject: false,
-    })
-    return
+  // remote 子包目录中执行 → 自动 filter 到当前 app（同进程，无需 spawn）
+  let filter = opts.filter
+  if (ctx.role === 'remote' && ctx.currentAppName && !filter && !opts.hostOnly) {
+    filter = ctx.currentAppName
+    logger.info(`Detected remote "${ctx.currentAppName}", limiting dev to this app + host.`)
   }
 
-  const apps = resolveDevApps(ctx, opts)
+  const apps = resolveApps(ctx.apps, filter, opts.hostOnly)
 
   const hostPort = await allocatePort(5173)
-  const remoteTargets: Omit<DevTarget, 'color'>[] = []
+  const hostName = ctx.hostConfig.name ?? 'host'
+
+  const remoteTargets: ViteTarget[] = []
   let nextPort = hostPort + 1
   for (const app of apps) {
     const port = await allocatePort(nextPort)
@@ -50,51 +52,89 @@ export async function devCommand(opts: DevOptions = {}): Promise<void> {
     })
   }
 
-  const colors = assignColors(
-    'host',
-    remoteTargets.map((t) => t.name),
-  )
-  const manifest = buildDevManifestEnv(
-    remoteTargets.map((t) => ({ name: t.name, port: t.port })),
-  )
+  const devRemotes: Record<string, string> = {}
+  for (const t of remoteTargets) {
+    // originjs federation 输出到 `${assetsDir}/${filename}`，默认 assetsDir=assets
+    devRemotes[t.name] = `http://127.0.0.1:${t.port}/assets/remoteEntry.js`
+  }
 
-  const targets: DevTarget[] = [
-    {
-      name: 'host',
-      role: 'host',
-      cwd: ctx.root,
-      port: hostPort,
-      color: colors['host'],
-      env: { MAHO_DEV_REMOTES: manifest },
-    },
-    ...remoteTargets.map((t) => ({
-      ...t,
-      color: colors[t.name],
-    })),
-  ]
+  const hostTarget: ViteTarget = {
+    name: hostName,
+    role: 'host',
+    cwd: ctx.root,
+    port: hostPort,
+    devRemotes,
+  }
 
-  logger.step(`Starting ${targets.length} process(es)...\n`)
+  // 启动顺序：remote 优先（build + preview 出 remoteEntry.js），
+  // 再起 host —— host 一加载就能解析 federation 入口，不会卡 loading。
+  const orderedTargets: ViteTarget[] = [...remoteTargets, hostTarget]
+  const prefixWidth = Math.max(...orderedTargets.map((t) => t.name.length)) + 2
 
-  const pm = new ProcessManager()
-  pm.onAllReady((ready) => {
-    logger.success('\nAll services ready:')
-    for (const t of ready) {
-      logger.info(`  ${t.name.padEnd(16)} → ${t.url}`)
+  logger.step(`Building ${remoteTargets.length} remote(s), then starting host...\n`)
+
+  const running: RunningTarget[] = []
+  const colorMap = new Map<string, PrefixColor>()
+  colorMap.set(hostName, 'cyan')
+  remoteTargets.forEach((t, i) => colorMap.set(t.name, pickPrefixColor(i + 1)))
+
+  for (const t of orderedTargets) {
+    const color = colorMap.get(t.name) ?? 'green'
+    const label = colorize(color, `[${t.name}]`.padEnd(prefixWidth))
+    try {
+      const handle =
+        t.role === 'host'
+          ? await startHostDevServer(t)
+          : await startRemotePreviewServer(t)
+      running.push({ ...t, color, url: handle.url, close: handle.close })
+      process.stdout.write(`${label} ready: ${handle.url}\n`)
     }
-    process.stdout.write('\n')
-  })
-  await pm.start(targets)
+    catch (err) {
+      logger.error(`Failed to start "${t.name}": ${(err as Error).message}`)
+      if (process.env.MAHO_DEBUG) {
+        console.error(err)
+      }
+      await shutdownAll(running)
+      process.exit(1)
+    }
+  }
 
-  installShutdownHandlers(pm)
+  process.stdout.write('\n')
+  logger.success('All services ready:')
+  for (const t of running) {
+    const label = colorize(t.color, `  ${t.name.padEnd(prefixWidth)}`)
+    process.stdout.write(`${label} ${pc.dim('→')} ${t.url}\n`)
+  }
+  process.stdout.write('\n')
+
+  installShutdownHandlers(running)
 }
 
-function installShutdownHandlers(pm: ProcessManager): void {
+function resolveApps(
+  apps: AppInfo[],
+  filter: string | undefined,
+  hostOnly: boolean | undefined,
+): AppInfo[] {
+  if (hostOnly) return []
+  if (!filter || filter === 'all') return apps
+  const names = filter.split(',').map((s) => s.trim()).filter(Boolean)
+  const found = apps.filter((a) => names.includes(a.name))
+  const missing = names.filter((n) => !apps.some((a) => a.name === n))
+  if (missing.length) logger.warn(`Apps not found in workspace: ${missing.join(', ')}`)
+  return found
+}
+
+async function shutdownAll(running: RunningTarget[]): Promise<void> {
+  await Promise.allSettled(running.map((r) => r.close()))
+}
+
+function installShutdownHandlers(running: RunningTarget[]): void {
   let shuttingDown = false
   const shutdown = async (): Promise<void> => {
     if (shuttingDown) return
     shuttingDown = true
     logger.info('\nShutting down...')
-    await pm.shutdown()
+    await shutdownAll(running)
     process.exit(0)
   }
   process.on('SIGINT', shutdown)

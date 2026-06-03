@@ -5,6 +5,8 @@ export type { CreateMahoContextOptions } from './createMahoContext'
 export { ConfigService, MahoConfigError } from './services/config'
 export type { ConfigServiceOptions } from './services/config'
 export { ModeService } from './services/mode'
+export { BootService } from './services/boot'
+export type { BootServiceOptions } from './services/boot'
 
 export { deepMerge, mergeArray } from './utils/merge'
 export { parseYaml, buildSchema } from './utils/yaml'

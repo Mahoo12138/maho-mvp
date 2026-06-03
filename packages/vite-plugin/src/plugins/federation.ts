@@ -1,8 +1,43 @@
+import { createRequire } from 'node:module'
 import federation from '@originjs/vite-plugin-federation'
 import type { Plugin } from 'vite'
 import type { ResolvedMahoPluginOptions, SharedDepsMap } from '../types'
 import { resolveSharedDeps } from './shared-deps'
 import { resolveExposes } from './auto-exposes'
+
+const require_ = createRequire(import.meta.url)
+
+/**
+ * `@originjs/vite-plugin-federation` 在 resolveId 钩子里会自己 resolve
+ * `@originjs/vite-plugin-federation` 来定位 `satisfy.mjs`。当 CLI 在 smoke
+ * 项目目录下程序化调用 vite 时，子项目自己并不直接依赖 originjs（它来自
+ * @maho/vite-plugin 的 transitive dep），rollup 从子项目根目录解析失败，
+ * federationId 变成 undefined → `dirname(undefined)` 抛 TypeError。
+ *
+ * 修复：注入一个高优先级 `resolveId` 插件，把这两个裸名解析为本进程能找到
+ * 的绝对路径（@maho/vite-plugin 安装目录下的 node_modules 总能解析到）。
+ */
+function federationSelfResolvePlugin(): Plugin {
+  let federationPkgPath: string | null = null
+  try {
+    federationPkgPath = require_.resolve('@originjs/vite-plugin-federation')
+  } catch {
+    /* 极端情况：构建环境里 vite-plugin 自己也找不到 originjs。让 rollup 报原错。 */
+  }
+
+  return {
+    name: 'maho:federation-self-resolve',
+    enforce: 'pre',
+    resolveId(id) {
+      if (!federationPkgPath) return null
+      if (id === '@originjs/vite-plugin-federation') return federationPkgPath
+      if (id === '__federation_fn_satisfy') {
+        return federationPkgPath.replace(/index\.(m?js)$/, 'satisfy.mjs')
+      }
+      return null
+    },
+  }
+}
 
 /**
  * Maho 联邦插件：包装 @originjs/vite-plugin-federation。
@@ -22,26 +57,34 @@ import { resolveExposes } from './auto-exposes'
  */
 export async function mahoFederationPlugin(
   options: ResolvedMahoPluginOptions,
-): Promise<Plugin> {
+): Promise<Plugin[]> {
   const shared = await resolveSharedDeps(options)
   const sharedForFederation = toFederationShared(shared)
 
+  const selfResolve = federationSelfResolvePlugin()
+
   if (options.role === 'host') {
-    return federation({
-      name: options.name,
-      remotes: {},
-      shared: sharedForFederation,
-    }) as Plugin
+    return [
+      selfResolve,
+      federation({
+        name: options.name,
+        remotes: {},
+        shared: sharedForFederation,
+      }) as Plugin,
+    ]
   }
 
   const exposes = resolveExposes(options)
 
-  return federation({
-    name: options.name,
-    filename: 'remoteEntry.js',
-    exposes,
-    shared: sharedForFederation,
-  }) as Plugin
+  return [
+    selfResolve,
+    federation({
+      name: options.name,
+      filename: 'remoteEntry.js',
+      exposes,
+      shared: sharedForFederation,
+    }) as Plugin,
+  ]
 }
 
 /**
