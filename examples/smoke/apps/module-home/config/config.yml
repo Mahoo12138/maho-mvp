@@ -1,0 +1,7 @@
+role: remote
+name: module-home
+boot: "@maho/boot-vue"
+prefix: /home
+
+exposes:
+  - ./mf-routes

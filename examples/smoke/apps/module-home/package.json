@@ -1,0 +1,12 @@
+{
+  "name": "module-home",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "@maho/boot-vue": "workspace:*",
+    "pinia": "^2.3.1",
+    "vue": "^3.5.0",
+    "vue-router": "^4.4.0"
+  }
+}

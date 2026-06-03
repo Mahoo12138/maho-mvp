@@ -1,0 +1,9 @@
+role: host
+name: smoke-host
+boot: "@maho/boot-vue"
+
+federation:
+  remotes: []
+
+layouts:
+  default: ./src/layouts/Default.vue
