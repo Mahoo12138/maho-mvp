@@ -1,6 +1,15 @@
 {
+  "permissions": {
+    "allow": [
+      "mcp__codegraph__codegraph_explore",
+      "PowerShell(Stop-Process *)",
+      "PowerShell(Out-File *)",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Get-Content *)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "codegraph"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }
