@@ -743,26 +743,134 @@ CLI 在构造 `ViteTarget` 时已知端口号（`port-manager` 分配），可�
 
 ---
 
-### S4-O18：shareScope 版本键解析 —— 从 `'undefined'` 改为实际安装版本
+### S4-O18：shareScope 版本键与 getter 结构修复
 
-**问题**：host 通过 `virtual:maho-config` 的 `shareScope` 向 remote 的 `init()` 传递共享依赖的 getter，但版本键（version key）初版固定为字符串 `'undefined'`。remote 的 module federation runtime 在 `getSharedFromRuntime` 中通过 `satisfy(versionKey, requiredVersion)` 匹配 —— `satisfy('undefined', '^3.4.0')` 在 semver 下必然为 false，导致 host shareScope 被跳过，remote 退回到自己的本地 singleton 副本（分离的 vue-router / pinia 实例）。
+**问题**（两个独立 bug 叠加）：
+
+1. **版本键使用了 semver range 而非具体版本号**：boot-vue 的 `sharedDeps` 含 `requiredVersion: '^3.4.0'`（semver range），初版 `buildShareScopeSource` 的 fallback 链 `dep.version ?? dep.requiredVersion ?? resolvePackageVersion(...)` 会在无 `version` 时把 `'^3.4.0'` 直接填进 shareScope 的版本键。remote runtime 调用 `satisfy(versionKey, requiredVersion)` —— `satisfy('^3.4.0', '^3.4.0')` 把 range 当 version 用，semver 解析失败。
+
+2. **getter 少了一层箭头**：originjs runtime 的调用模式是 `await (await versionValue.get())()` —— 即 `get` 必须返回一个 factory 函数，而非直接返回 `Promise<Module>`。初版 `get: () => import("vue")` 导致 runtime 对 Module namespace 做函数调用，抛 TypeError。
 
 **采用方案**（`packages/vite-plugin/src/plugins/virtual-config.ts` `buildShareScopeSource`）：
 
-1. 优先使用 `shared` 配置中显式声明的 `version`（来自用户 / boot adapter）
-2. 其次 `requiredVersion`
-3. 兜底从 `node_modules/<pkg>/package.json` 读取实际安装版本（`resolvePackageVersion`）
-
-`virtual:maho-config` 新增命名导出 `shareScope`，由 `@maho/boot` 的 `federation.ts` 在 `loadRemoteEntryOnce` 中导入并传给 `container.init()`，替代原来空的 `globalThis.__federation_shared__`。
+1. 版本键跳过 `requiredVersion`，只从 `dep.version ?? resolvePackageVersion(name, projectRoot)` 取。`resolvePackageVersion` 从 `node_modules/<pkg>/package.json` 读实际安装版本（如 `'2.3.1'`），该 version 可被 `satisfy('2.3.1', '^2.1.0')` 正确匹配。
+2. `get` 改为双箭头：`get: () => () => import("vue")` —— 外层给 runtime 调 `get()` 拿到 factory，内层 factory 被 runtime 调用时执行 `import()`。
 
 **影响**：
-- ✅ 版本键（如 `'3.5.35'`）可被 semver 正确验证，满足 remote 的 `requiredVersion`（`^3.4.0`）
-- ✅ vue / vue-router / pinia 在 host 与 remote 之间共用同一实例，singleton 机制生效
-- ✅ 对未安装的包返回 `'0.0.0'` 作为 fallback，不做 crash
-- ⚠️ `import('vue')` 依赖 Vite transform 管线将其重写为预打包 dep URL；仅在 Vite dev/prod 上下文中有效
+- ✅ shareScope 版本键（如 `'3.5.35'`）可被 semver 验证，满足 remote 的 `requiredVersion`（`^3.4.0`）
+- ✅ 双箭头使 originjs 的 `await (await get())()` 模式正确执行
+- ✅ vue / vue-router / pinia 在 host 与 remote 间共用同一实例，`inject(routerKey)` 和 `useCounterStore()` 正常工作
 
-- **Federation 运行时变量名稳定化**：当前 boot 用 `window.__federation_shared__` 兜底，依赖 `@originjs/vite-plugin-federation` 的内部命名。需要在 V2 跟进底层实现变更，或封装一层适配。
-- **类型注册表增量更新**：Step 3 接入 core 后实现 lockfile mtime 比对，避免冷启动全量扫描。
-- **`mf.load(key)` 路径中是否允许斜杠嵌套**：当前实现按首段切分 remote 名，剩余按 `./` + path 拼装。需要再验证 path 段含连字符/驼峰的边界。
-- **用户级 vite 插件 escape hatch**：S4-O11 后用户无法直接在工程里追加 vite 插件。V2 可通过 `config/config.yml` 增加 `vite: { plugins: [...] }` 或 `maho.config.ts` 入口暴露口。
-- **`@maho/vite-plugin` 的 `bootAdapter` 参数清理**：S4-O12 后 vite-runner 不再依赖该参数，但 vite-plugin 内部 `shared-deps.ts` 仍保留旧逻辑兼容直接用 `maho()` 的存量用户。V2 评估是否能彻底删除。
+---
+
+### S4-O19：生产构建 target 设为 `esnext`
+
+**问题**：`maho build` 在 `vite-runner.ts` 的 `runBuild` 中未设置 `build.target`，Vite 默认 target（`chrome87` 等）不支持 top-level await。originjs 生成的 shared/expose chunk 大量使用 `await importShared('vue')` 顶层 await，esbuild 转换时直接报错。
+
+**采用方案**（`packages/cli/src/core/vite-runner.ts` `runBuild`）：与 dev 模式的 `startRemotePreviewServer` 保持一致 —— `build: { target: 'esnext', minify: false, sourcemap: true }`。
+
+**影响**：
+- ✅ `maho build --all` 全量构建通过（2/2）
+- ⚠️ 输出不压缩、target 激进，适合当前 MVP 阶段；V2 按需引入 `build.target` / `build.minify` 的可配置项
+
+---
+
+## Step 5：maho init + maho add + 模板系统
+
+### S5-O1：init 不自动 `install`，打印命令让用户自己跑
+
+**原始设计**（`design-cli.md` §maho init）：`maho init` 末尾自动执行 `pnpm install`（或其他检测到的包管理器）。
+
+**问题**：
+1. `install` 耗时 30s–2min，用户看着光标闪不知道在干嘛 —— 体验差
+2. init 结束后用户可能想检查生成的文件再 install
+3. 跨平台 install 错误处理复杂（Windows pnpm 路径、npm 网络超时），不应阻塞 init 成功
+4. 与 `create-vue` / `create-react-app` 社区实践一致
+
+**采用方案**（`packages/cli/src/commands/init.ts`）：渲染模板后打印「Next steps」提示，包含 `cd <dir>` → `<pm> install` → `maho dev` 三步指引。`packageManager` 变量传入模板但仅用于提示文案。
+
+**影响**：
+- ✅ init 命令瞬间完成，用户可检查生成文件
+- ✅ 安装失败不影响 init 成功
+- ✅ 用户可按需使用自己的 `--registry` / `--prefer-offline` 等 npm/pnpm flag
+
+---
+
+### S5-O2：模板加载器先只做内置模板，本地/npm 推迟
+
+**原始设计**（`design-cli.md` §模板加载器）：`loadTemplate(source)` 支持三种来源 —— 内置名（`'host-vue'`）、本地路径（`'./my-template'`）、npm 包（`'@org/maho-template-custom'`）。
+
+**问题**：本地路径和 npm 包模板加载需要完整的模板接口（`MahoTemplate` 含 prompts/transform/postInstall）、npm 包解析（jiti 编译入口）、路径校验等一整套基础设施。但 MVP 阶段用户的实际需求为零 —— 内置 host-vue + remote-vue 已覆盖初始场景。
+
+**采用方案**（`packages/cli/src/template/loader.ts`）：Step 5 仅实现内置模板名查找（`BUILT_IN_META` 字典 + `import.meta.url` 定位模板目录）。非内置名抛 `MahoError('template-not-found', ...)` 并提示可用内置模板列表。
+
+**影响**：
+- ✅ 减 200+ 行未来才用的代码
+- ✅ 模板接口简化（`MahoTemplate` 仅含 `meta` + `templateDir`，无 prompts/transform/postInstall）
+- ⚠️ 错误信息指明内置模板名，方便用户发现当前能力边界
+
+---
+
+### S5-O3：`@inquirer/prompts` 替代 `inquirer`
+
+**原始设计**（`design-mvp.md` §关键技术依赖）：`inquirer@9` 用于交互式问答。
+
+**问题**：inquirer v9 是 CJS 模块，依赖链重（含 `rxjs` 等）。项目是 ESM（`"type": "module"`），CJS 导入需要额外的兼容处理。
+
+**采用方案**：`@inquirer/prompts`（inquirer 作者的官方 ESM 重写版）：
+- 同作者、同 API 风格（`input()` / `select()` / `confirm()` 等独立导出函数）
+- ESM native，零额外依赖
+- Step 5 刚好只需要 `input` / `select` / `confirm` 三个
+
+**影响**：
+- ✅ 安装体积从 ~500KB 降到 ~80KB
+- ✅ ESM import 无兼容问题
+- ⚠️ API 从 `inquirer.prompt([...])` 变为独立函数调用（`await input({...})`），但代码更简洁
+
+---
+
+### S5-O4：仅 Vue 模板，React 推迟到 V2
+
+**原始设计**（`design-cli.md` §内置模板清单）：4 个内置模板 —— `host-vue`、`remote-vue`、`host-react`、`remote-react`。
+
+**问题**：`@maho/boot-react` 未实现，React 模板缺少对应的 `createMahoApp` / 路由适配 / 布局组件，无法在生成后运行。
+
+**采用方案**：Step 5 仅创建 `host-vue` 和 `remote-vue` 两个内置模板。React 模板留到 `@maho/boot-react` 成熟后再添加（V2）。
+
+**影响**：
+- ✅ 模板维护量减半
+- ✅ 生成的项目可立即运行（依赖已存在的 boot-vue）
+- ⚠️ `listBuiltinTemplates()` 返回 `['host-vue', 'remote-vue']`
+
+---
+
+### S5-O5：CLI `main` 保持指向 `src/`，不做 dist 构建
+
+**原始设计**（Step 4 plan §`package.json`）：`"main": "./dist/index.js"`，`"bin": { "maho": "./bin/maho.mjs" }`，bin 入口从 dist 导入。
+
+**问题**：模板 `.ejs` 文件不被 tsc 处理，dist 构建需要额外脚本将 `src/template/built-in/**/*.ejs` 复制到 `dist/template/built-in/`。当前没有这个复制步骤，dist 下的 loader 会找不到模板目录。
+
+**采用方案**：CLI 的 `package.json` 已设 `"main": "./src/index.ts"`，运行时通过 `jiti` 直接跑 ts 源码。模板路径基于 `import.meta.url`（`src/template/built-in/`）。dist 构建推迟到 V1 发布前统一处理，届时一并写 `.ejs` 复制脚本。
+
+**影响**：
+- ✅ 开发期 (`pnpm exec jiti ...`) 模板正常加载
+- ✅ 不需要额外维护 .ejs 复制脚本
+- ⚠️ 发布到 npm 前必须完成 dist 构建 + .ejs 搬运
+
+---
+
+### S5-O6：`maho add` 的 workspace 注册仅处理 pnpm
+
+**原始设计**（`design-cli.md` §maho add）：`maho add` 自动注册子包到 workspace 配置。
+
+**问题**：npm/yarn workspaces 的注册机制与 pnpm 不同 —— npm 用 `package.json` 的 `workspaces` 字段，yarn 用 `package.json` 的 `workspaces` 字段但格式略有差异。三者的 workspace glob 语法不完全一致。
+
+**采用方案**（`packages/cli/src/commands/add.ts` `registerToWorkspace`）：仅处理 `pnpm-workspace.yaml`（当前 Maho 生态唯一使用的 workspace 管理方式）。若文件不存在（非 pnpm 项目），静默跳过。npm/yarn 注册逻辑推迟到真正需要时。
+
+**影响**：
+- ✅ pnpm 用户开箱即用（`maho add` → 自动追加到 `pnpm-workspace.yaml`）
+- ⚠️ npm/yarn 用户需手动注册子包到 workspace（错误信息可后续改进）
+
+---
+
+## 待跟踪事项（V2）
