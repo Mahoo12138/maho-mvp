@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs'
 import { cac } from 'cac'
 import { devCommand } from './commands/dev'
 import { buildCommand } from './commands/build'
+import { initCommand } from './commands/init'
+import { addCommand } from './commands/add'
 import { logger } from './utils/logger'
 import { MahoError } from './utils/errors'
 
@@ -33,6 +35,18 @@ cli
       all: options['all'],
       mode: options['mode'],
     }).catch(handleError)
+  })
+
+cli
+  .command('init [name]', 'Create a new Maho workspace')
+  .action((name) => {
+    return initCommand(name).catch(handleError)
+  })
+
+cli
+  .command('add [name]', 'Add a new remote app to the workspace')
+  .action((name) => {
+    return addCommand(name).catch(handleError)
   })
 
 cli.help()

@@ -1,0 +1,8 @@
+import { defineModuleRoutes } from '@maho/boot-vue'
+
+export default defineModuleRoutes([
+  {
+    path: '',
+    component: () => import('./pages/Home.vue'),
+  },
+])

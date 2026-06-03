@@ -6,6 +6,8 @@ export type MahoErrorCode =
   | 'no-vite-config'
   | 'config-invalid'
   | 'app-not-found'
+  | 'dir-exists'
+  | 'template-not-found'
 
 /**
  * CLI 专用错误。CLI 顶层 handler 见到 MahoError 时只打 message + exit 1；

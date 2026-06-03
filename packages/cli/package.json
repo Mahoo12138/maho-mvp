@@ -20,15 +20,24 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
-  "keywords": ["maho", "microfrontend", "cli"],
+  "keywords": [
+    "maho",
+    "microfrontend",
+    "cli"
+  ],
   "license": "MIT",
   "dependencies": {
+    "@inquirer/prompts": "^8.5.2",
     "@maho/boot": "workspace:*",
     "@maho/core": "workspace:*",
     "@maho/vite-plugin": "workspace:*",
     "cac": "^6.7.14",
+    "ejs": "^6.0.1",
     "jiti": "^2.4.0",
     "picocolors": "^1.1.1",
     "vite": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/ejs": "^3.1.5"
   }
 }

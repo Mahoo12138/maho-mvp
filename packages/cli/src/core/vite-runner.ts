@@ -179,5 +179,10 @@ export async function runBuild(
     plugins,
     mode,
     logLevel: 'info',
+    build: {
+      target: 'esnext',
+      minify: false,
+      sourcemap: true,
+    },
   })
 }
