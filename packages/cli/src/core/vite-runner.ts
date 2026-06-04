@@ -171,12 +171,14 @@ export async function runBuild(
   target: ViteTarget,
   mode: string,
 ): Promise<void> {
-  const { plugins } = await buildPluginStack(target, mode)
+  const { ctx, plugins } = await buildPluginStack(target, mode)
+  const base = ctx.config.resolved.federation?.base
 
   await viteBuild({
     root: target.cwd,
     configFile: false,
     plugins,
+    base,
     mode,
     logLevel: 'info',
     build: {

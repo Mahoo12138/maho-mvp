@@ -23,6 +23,8 @@ export interface MFConfig {
 
   /** 联邦配置（host 专用） */
   federation?: {
+    /** 生产构建时的 public base 路径（如 CDN URL），传给 vite build --base */
+    base?: string
     remotes?: string[]
     manifestUrl?: string | null
     dev?: {
