@@ -30,6 +30,8 @@
     "@inquirer/prompts": "^8.5.2",
     "@maho/boot": "workspace:*",
     "@maho/core": "workspace:*",
+    "@maho/devtools": "workspace:*",
+    "@maho/devtools-client": "workspace:*",
     "@maho/vite-plugin": "workspace:*",
     "cac": "^6.7.14",
     "ejs": "^6.0.1",

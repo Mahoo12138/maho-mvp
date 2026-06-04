@@ -18,6 +18,7 @@ function makeCtx(overrides: Partial<WorkspaceContext> = {}): WorkspaceContext {
       makeApp('module-c'),
     ],
     hostConfig: { role: 'host' } as WorkspaceContext['hostConfig'],
+    mahoCtx: {} as WorkspaceContext['mahoCtx'],
     ...overrides,
   }
 }

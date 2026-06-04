@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { createMahoContext, type ResolvedMFConfig } from '@maho/core'
+import { createMahoContext, type MFContext, type ResolvedMFConfig } from '@maho/core'
 import { MahoError } from '../utils/errors'
 
 export interface AppInfo {
@@ -25,6 +25,8 @@ export interface WorkspaceContext {
   apps: AppInfo[]
   /** workspace root 的解析后配置 */
   hostConfig: ResolvedMFConfig
+  /** workspace root 上构建出来的 Maho/Cordis 容器，供 dev / devtools 等子命令复用 */
+  mahoCtx: MFContext
 }
 
 /**
@@ -42,7 +44,7 @@ export async function resolveWorkspaceContext(
   const ctx = await createMahoContext({ projectRoot: root, mode })
   const hostConfig = ctx.config.resolved
   const { role, currentAppName } = detectRole(cwd, root, apps)
-  return { root, cwd, role, currentAppName, apps, hostConfig }
+  return { root, cwd, role, currentAppName, apps, hostConfig, mahoCtx: ctx }
 }
 
 /**

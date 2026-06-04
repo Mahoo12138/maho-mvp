@@ -1,4 +1,5 @@
 import pc from 'picocolors'
+import { NodeDevtools, configPanel } from '@maho/devtools'
 import { resolveWorkspaceContext, type AppInfo } from '../core/workspace'
 import { allocatePort } from '../core/port-manager'
 import {
@@ -16,6 +17,12 @@ import {
 export interface DevOptions {
   filter?: string
   hostOnly?: boolean
+  /** Enable in-browser devtools panel. Default true. */
+  devtools?: boolean
+  /** Devtools server port. Default 9123 (auto-allocates if taken). */
+  devtoolsPort?: number
+  /** Auto-open devtools in browser. Default false. */
+  open?: boolean
 }
 
 interface RunningTarget extends ViteTarget {
@@ -102,9 +109,25 @@ export async function devCommand(opts: DevOptions = {}): Promise<void> {
     const label = colorize(t.color, `  ${t.name.padEnd(prefixWidth)}`)
     process.stdout.write(`${label} ${pc.dim('→')} ${t.url}\n`)
   }
+
+  let devtoolsCleanup: (() => Promise<void>) | undefined
+  if (opts.devtools !== false) {
+    const port = await allocatePort(opts.devtoolsPort ?? 9123)
+    try {
+      await ctx.mahoCtx.plugin(NodeDevtools, { port, open: opts.open, devMode: true })
+      await ctx.mahoCtx.plugin(configPanel)
+      const devtoolsLabel = colorize('magenta', `  ${'devtools'.padEnd(prefixWidth)}`)
+      process.stdout.write(`${devtoolsLabel} ${pc.dim('→')} http://127.0.0.1:${port}/\n`)
+      devtoolsCleanup = async (): Promise<void> => {
+        await ctx.mahoCtx.fiber.dispose()
+      }
+    } catch (err) {
+      logger.warn(`Devtools failed to start: ${(err as Error).message}`)
+    }
+  }
   process.stdout.write('\n')
 
-  installShutdownHandlers(running)
+  installShutdownHandlers(running, devtoolsCleanup)
 }
 
 function resolveApps(
@@ -125,12 +148,18 @@ async function shutdownAll(running: RunningTarget[]): Promise<void> {
   await Promise.allSettled(running.map((r) => r.close()))
 }
 
-function installShutdownHandlers(running: RunningTarget[]): void {
+function installShutdownHandlers(
+  running: RunningTarget[],
+  devtoolsCleanup?: () => Promise<void>,
+): void {
   let shuttingDown = false
   const shutdown = async (): Promise<void> => {
     if (shuttingDown) return
     shuttingDown = true
     logger.info('\nShutting down...')
+    if (devtoolsCleanup) {
+      await devtoolsCleanup().catch(() => undefined)
+    }
     await shutdownAll(running)
     process.exit(0)
   }

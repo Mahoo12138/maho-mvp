@@ -14,13 +14,19 @@ const pkg = JSON.parse(
 const cli = cac('maho')
 
 cli
-  .command('dev', 'Start dev servers for host + selected remotes')
+  .command('dev', 'Start dev servers (host + remotes + devtools panel)')
   .option('--filter <names>', 'Comma-separated app names, or "all"')
   .option('--host-only', 'Start host only')
+  .option('--no-devtools', 'Disable the in-browser devtools panel')
+  .option('--devtools-port <port>', 'Devtools server port (default: 9123)')
+  .option('--open', 'Auto-open devtools in browser')
   .action((options) => {
     return devCommand({
       filter: options.filter,
       hostOnly: options['hostOnly'],
+      devtools: options['devtools'] !== false,
+      devtoolsPort: options['devtoolsPort'] ? Number(options['devtoolsPort']) : undefined,
+      open: options['open'],
     }).catch(handleError)
   })
 
