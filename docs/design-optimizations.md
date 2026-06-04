@@ -712,7 +712,7 @@ CLI 在构造 `ViteTarget` 时已知端口号（`port-manager` 分配），可�
 **影响**：
 - ✅ 所有跨域 chunk 解析自动正确，无需用户理解 Vite `base` / Rollup emitFile / originjs path 拼接的内部机制
 - ✅ dev 模式下 base 动态跟随端口分配（端口可能因为占用而偏移）
-- ⚠️ 生产构建（`maho build`）的 `base` 应来自 config YAML 的 `federation.base` 字段 —— 留到 V2 落地
+- ✅ 生产构建（`maho build`）的 `base` 也已支持 —— `MFConfig.federation.base` 字段在 `vite-runner.ts` 的 `runBuild` 中被读取并传入 `viteBuild({ base })`，用户可在 `config/config.yml` 中配置 CDN 路径
 
 ---
 
@@ -870,6 +870,133 @@ CLI 在构造 `ViteTarget` 时已知端口号（`port-manager` 分配），可�
 **影响**：
 - ✅ pnpm 用户开箱即用（`maho add` → 自动追加到 `pnpm-workspace.yaml`）
 - ⚠️ npm/yarn 用户需手动注册子包到 workspace（错误信息可后续改进）
+
+---
+
+## M6：测试体系 + V1 打磨
+
+> M6 为 7 个包补齐了单元测试基础设施，同时处理了 V1 遗留的打磨项。
+
+### M6-O1：Vitest 双环境配置 —— node + jsdom
+
+**原始设计**：无测试体系。
+
+**采用方案**：两个 vitest 配置文件覆盖不同运行环境：
+
+- `vitest.node.config.ts`：`environment: 'node'`，覆盖 core / cli / boot 的纯逻辑测试。排除 boot-vue（需要完整 Vue runtime）。
+- `vitest.browser.config.ts`：`environment: 'jsdom'`，覆盖需要 DOM API 的测试（loading.ts、boot-vue 组件）。
+
+`vitest@^2.x` 与项目现有的 Vite 5 兼容（vitest 3.x+ 要求 Vite 6+）。
+
+**影响**：
+- ✅ 145 个测试覆盖 19 个文件，全部通过
+- ✅ 测试与 typecheck 解耦（测试文件不进 tsc 编译矩阵，避免 mock 类型噪音）
+- ✅ `pnpm test` / `pnpm test:watch` / `pnpm test:coverage` 三条命令即可开发
+
+---
+
+### M6-O2：测试文件与源码同目录
+
+**原始设想**（部分测试指南）：`__tests__/` 独立目录。
+
+**采用方案**：测试文件放在被测文件的同目录下（`foo.test.ts` 紧邻 `foo.ts`），理由：
+1. 导入路径最短（`./foo.js` 而非 `../../src/foo.js`）
+2. 删除/移动源码时测试同步消失，避免孤儿测试
+3. vitest 默认 include 模式 `*.test.ts` 无需额外配置
+
+**影响**：
+- ✅ 所有测试 import 使用相对路径 `'./xxx.js'`
+- ✅ 新增/删除模块时测试文件物理邻近，减少遗忘
+
+---
+
+### M6-O3：`vi.mock` 工厂函数的闭包限制
+
+**发现**：vitest 的 `vi.mock` 调用在编译期被 hoist 到文件顶部，早于所有 `import` 语句。这意味着 mock 工厂函数内**不能引用任何外部 import 的变量**（如 `EventEmitter`、路径常量等），否则在 hoist 后的执行时机中变量尚未初始化。
+
+**采用方案**：
+1. 需要 mock 的依赖使用模块级可变状态（`let` 变量在 `vi.mock` 工厂外声明，工厂内闭包捕获）
+2. 不需要复杂逻辑的 mock 使用内联对象字面量（如 `port-manager.test.ts` 中的 `createServer` mock）
+3. `vi.stubGlobal` / `vi.stubEnv` 用于注入全局变量（`document`、`process.env`）
+
+**影响**：
+- ✅ `port-manager.test.ts` 的 mock 策略从「依赖 EventEmitter」改为「纯对象 + 模块级回调数组」
+- ✅ 测试文件编写规范：mock 工厂保持自包含
+
+---
+
+### M6-O4：`MahoError.code` vs `message` 的差异
+
+**发现**：`MahoError` 将错误码存储在 `code` 属性上，而 `message` 是独立的友好文案。vitest 的 `toThrow('string')` 断言检查的是 `error.message` 属性，而非 `error.code`。
+
+**采用方案**：测试中使用正则 `/pattern/` 匹配 `message` 文本来验证错误类型，而非直接匹配 `code`。
+
+**影响**：
+- ✅ `topology.test.ts`：`toThrow(/Run "maho build"/)` 而非 `toThrow('wrong-directory')`
+- ✅ `loader.test.ts`：`toThrow(/template-not-found|Template.*not found/)` 覆盖两种文案
+
+---
+
+### M6-O5：S4-O15 生产构建 base 路径补齐
+
+**问题**：`maho build` 的生产构建未读取 `federation.base` 配置，输出的 chunk 引用使用默认的 `/` base 路径。若用户将构建产物部署到 CDN（如 `https://cdn.example.com/my-app/`），所有资源路径将错误。
+
+**采用方案**：
+1. `MFConfig.federation` 新增 `base?: string` 字段（`packages/core/src/interfaces/MFConfig.ts`）
+2. `vite-runner.ts` 的 `runBuild` 从 `ctx.config.resolved.federation?.base` 读取并传入 `viteBuild({ base })`
+
+```yaml
+# config/config.yml
+federation:
+  base: "https://cdn.example.com/my-app/"
+```
+
+**影响**：
+- ✅ 用户可在 config YAML 中声明生产构建的 public base 路径
+- ✅ CLI 零额外参数，配置即声明
+- ✅ dev 模式的 base 仍由 `startRemotePreviewServer` 动态计算（端口分配），不受影响
+
+---
+
+### M6-O6：测试覆盖目标与缺口
+
+**已完成覆盖（19 文件，145 测试）：**
+
+| 包 | 文件 | 测试数 | 难度 |
+|---|---|---|---|
+| core | merge.test.ts | 19 | 纯函数 |
+| core | config-validator.test.ts | 18 | 轻 mock |
+| core | env.test.ts | 10 | fs mock |
+| core | yaml.test.ts | 8 | fs mock |
+| core | mode.test.ts | 5 | cordis mock |
+| boot | route-merger.test.ts | 17 | 纯函数 |
+| boot | registry.test.ts | 7 | 零 mock |
+| boot | layout.test.ts | 9 | registry mock |
+| boot | loading.test.ts | 5 | DOM mock |
+| boot | routeName.test.ts | 3 | 纯函数 |
+| boot | defineLayouts.test.ts | 3 | 纯函数 |
+| boot | defineModuleRoutes.test.ts | 2 | 纯函数 |
+| boot | defineMFMeta.test.ts | 1 | 纯函数 |
+| cli | detector.test.ts | 8 | fs mock |
+| cli | topology.test.ts | 9 | workspace mock |
+| cli | errors.test.ts | 4 | 零 mock |
+| cli | port-manager.test.ts | 6 | net mock |
+| cli | loader.test.ts | 5 | fs mock |
+| cli | renderer.test.ts | 6 | 真实临时目录 |
+
+**有意推迟的测试（ROI 低 / 需要复杂集成环境）：**
+
+| 模块 | 原因 |
+|---|---|
+| vite-plugin 全部 | 需要真实 Vite 构建，ROI 低 |
+| boot-vue 组件 | 需要 @vue/test-utils + 完整 Vue runtime |
+| federation.ts | 需要 mock fetch + 动态 import + share scope |
+| route-collect.ts | 依赖 federation 返回值 |
+| workspace.ts | 需要真实临时目录 + createMahoContext mock |
+| config.service.ts | 依赖 yaml/env/validate 全部 mock |
+| boot.service.ts | 依赖 jiti 动态 import mock |
+| createMahoContext.ts | 依赖所有 service 初始化 |
+| pipeline.ts | 需要真实浏览器/MF runtime |
 
 ---
 
