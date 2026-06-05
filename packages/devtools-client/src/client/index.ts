@@ -1,5 +1,15 @@
-import { Context, Service } from 'cordis'
-import { createApp, defineComponent, h, markRaw, type App } from 'vue'
+import { Context, Service, symbols } from 'cordis'
+import {
+  createApp,
+  defineComponent,
+  h,
+  markRaw,
+  onErrorCaptured,
+  provide,
+  type App,
+  type Component,
+  type DefineComponent,
+} from 'vue'
 import { SocketService, type SocketOptions } from './socket.js'
 import { RpcService } from './rpc.js'
 import { LoaderService } from './loader.js'
@@ -55,6 +65,33 @@ export class ClientService extends Service {
   mount(selector: string | Element = '#app'): void {
     this.app.mount(selector as never)
   }
+
+  /**
+   * Wrap a panel component so its `setup()` sees the shadow ctx that has
+   * `$entry` set. Without this, `useRpc()` falls back to the bare root ctx
+   * where `$entry` is undefined. Mirrors webui-main `ClientService.wrapComponent`.
+   *
+   * If the current ctx has no `$entry` (i.e. wrapped from the root, not a
+   * panel-loaded fiber) we pass the component through unchanged — there's
+   * nothing to inject.
+   */
+  wrapComponent(component: Component): DefineComponent
+  wrapComponent(component?: Component): DefineComponent | undefined
+  wrapComponent(component: Component) {
+    if (!component) return undefined
+    if (!this.ctx.$entry) return component
+    let ctx = this.ctx as Context
+    if ((ctx as never)[symbols.shadow]) {
+      ctx = Object.getPrototypeOf(ctx)
+    }
+    return markRaw(defineComponent((props, { slots }) => {
+      provide(kContext, ctx)
+      onErrorCaptured(() => {
+        return ctx.fiber.uid !== null
+      })
+      return () => h(component, props, slots)
+    }))
+  }
 }
 
 /**
@@ -69,7 +106,11 @@ export class ClientService extends Service {
  */
 export function createClient(root: ReturnType<typeof defineComponent>, options?: Omit<ClientOptions, 'root'>): Context {
   const ctx = new Context()
-  ctx.plugin(ClientService, { ...options, root })
+  // Direct construction (not `ctx.plugin`) — matches webui-main: Service's
+  // own constructor registers it on the context, and we need `ctx.client`
+  // available synchronously so callers can `ctx.client.mount(...)`.
+  // eslint-disable-next-line @typescript-eslint/no-unused-expressions, no-new
+  new ClientService(ctx, { ...options, root })
   return ctx
 }
 

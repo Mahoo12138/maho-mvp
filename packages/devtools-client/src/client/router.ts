@@ -273,6 +273,9 @@ export class RouterService extends Service {
   }
 
   page(options: Activity.Options): unknown {
+    // Wrap the component so its setup() sees the shadow ctx (with `$entry`)
+    // through `provide(kContext, ...)`. Mirrors webui-main RouterService.page.
+    options.component = this.ctx.client.wrapComponent(options.component)
     return this.ctx.effect(() => {
       const activity = new Activity(this.ctx, options)
       return activity.setup()
